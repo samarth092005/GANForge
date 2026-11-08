@@ -147,7 +147,7 @@ class TestDatasetPipeline(unittest.TestCase):
     # 4. Train / Validation Split Reproducibility
     # ---------------------------------------------------------
     def test_split_dataset_ratio_and_seed(self) -> None:
-        """Verify 80/20 train-val split counts and seed reproducibility."""
+        """Verify 80/20 train-val split counts, seed reproducibility, and disjoint sets."""
         dummy_data = np.zeros((10, 64, 64, 3), dtype=np.float32)
         train_a, val_a = split_dataset(dummy_data, train_ratio=0.8, seed=42)
         train_b, val_b = split_dataset(dummy_data, train_ratio=0.8, seed=42)
@@ -157,6 +157,19 @@ class TestDatasetPipeline(unittest.TestCase):
         # Check seed reproducibility
         np.testing.assert_array_equal(train_a, train_b)
         np.testing.assert_array_equal(val_a, val_b)
+
+        # Confirm training and validation sets are completely disjoint (zero data leakage)
+        tagged_data = np.arange(10)[:, None, None, None] * np.ones(
+            (10, 64, 64, 3), dtype=np.float32
+        )
+        train_t, val_t = split_dataset(tagged_data, train_ratio=0.8, seed=42)
+        train_tags = set(train_t[:, 0, 0, 0].tolist())
+        val_tags = set(val_t[:, 0, 0, 0].tolist())
+        self.assertEqual(
+            len(train_tags.intersection(val_tags)),
+            0,
+            "Data leakage detected: Training and validation sets must be disjoint!",
+        )
 
     def test_split_dataset_small_sample_edge_case(self) -> None:
         """Verify split on minimal 2-sample dataset allocates 1 train, 1 val."""
@@ -180,6 +193,32 @@ class TestDatasetPipeline(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             unconsented.validate_consent()
         self.assertIn("Consent confirmation is required", str(ctx.exception))
+
+    def test_synthetic_metadata_validation(self) -> None:
+        """Verify synthetic procedural metadata tracks generator and requires generator name."""
+        meta = DatasetMetadata(
+            dataset_name="Procedural Rangoli Benchmark",
+            provenance_type="synthetic_procedural",
+            source="Algorithmic Generator",
+            license="MIT / Academic Benchmark",
+            consent_confirmed=True,
+            generator_name="GANForge Rangoli Engine",
+            usage_terms="Open academic research",
+        )
+        meta.validate_consent()
+        self.assertEqual(meta.provenance_type, "synthetic_procedural")
+
+        # Generator name is mandatory for synthetic datasets
+        missing_gen = DatasetMetadata(
+            dataset_name="Procedural Rangoli Benchmark",
+            provenance_type="synthetic_procedural",
+            source="Algorithmic Generator",
+            license="MIT",
+            consent_confirmed=True,
+            generator_name="",  # Missing
+        )
+        with self.assertRaises(ValueError):
+            missing_gen.validate_consent()
 
     def test_metadata_save_and_load(self) -> None:
         """Verify valid metadata is correctly saved and loaded as JSON."""

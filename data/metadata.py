@@ -14,12 +14,20 @@ from typing import Any, Optional
 
 @dataclass
 class DatasetMetadata:
-    """Stores provenance, consent, and licensing information for an uploaded dataset."""
+    """Stores provenance, consent, and licensing information for an uploaded dataset.
+
+    Distinguishes between synthetic procedurally generated datasets and
+    user-uploaded third-party image datasets.
+    """
 
     dataset_name: str
     source: str
     license: str
     consent_confirmed: bool
+    provenance_type: str = "user_uploaded"  # "synthetic_procedural" or "user_uploaded"
+    generator_name: str = ""
+    generation_parameters: dict[str, Any] = field(default_factory=dict)
+    usage_terms: str = ""
     source_url: str = ""
     consent_notes: str = ""
     registered_at: str = field(
@@ -40,12 +48,23 @@ class DatasetMetadata:
             raise ValueError("Dataset source must be documented.")
         if not self.license or not self.license.strip():
             raise ValueError("Dataset license information must be explicitly declared.")
-        if not self.consent_confirmed:
-            raise ValueError(
-                "Responsible AI Violation: Consent confirmation is required. "
-                "You must verify that you possess the necessary rights or permission "
-                "to process and fine-tune models on these images."
-            )
+
+        if self.provenance_type == "synthetic_procedural":
+            if not self.generator_name or not self.generator_name.strip():
+                raise ValueError(
+                    "Synthetic procedural datasets must document the generator_name."
+                )
+            if not self.consent_confirmed:
+                raise ValueError(
+                    "Synthetic generation authorization must be confirmed."
+                )
+        else:
+            if not self.consent_confirmed:
+                raise ValueError(
+                    "Responsible AI Violation: Consent confirmation is required for user-provided data. "
+                    "You must verify that you possess the necessary rights or permission "
+                    "to process and fine-tune models on these images."
+                )
 
     def to_dict(self) -> dict[str, Any]:
         """Convert metadata to dictionary representation."""
@@ -75,6 +94,10 @@ class DatasetMetadata:
             source=data.get("source", "Unknown Source"),
             license=data.get("license", "Unspecified"),
             consent_confirmed=bool(data.get("consent_confirmed", False)),
+            provenance_type=data.get("provenance_type", "user_uploaded"),
+            generator_name=data.get("generator_name", ""),
+            generation_parameters=data.get("generation_parameters", {}),
+            usage_terms=data.get("usage_terms", ""),
             source_url=data.get("source_url", ""),
             consent_notes=data.get("consent_notes", ""),
             registered_at=data.get(
