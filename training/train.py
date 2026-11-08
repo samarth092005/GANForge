@@ -204,11 +204,18 @@ def train_dcgan(
         start_epoch = ckpt_mgr.restore_latest()
         if start_epoch > 0:
             logger.info(f"Resuming training from epoch {start_epoch} up to target {epochs}.")
-            # Load existing history if available
+            # Load existing history if available and filter to avoid duplicate epoch entries
             existing_json = Path(metrics_dir) / "training_history.json"
             if existing_json.exists():
                 try:
-                    logger_cb.history = TrainingLogger.load_metrics(existing_json)
+                    raw_history = TrainingLogger.load_metrics(existing_json)
+                    # Strictly retain only epochs up to start_epoch (prevents duplication upon resume)
+                    logger_cb.history = [
+                        rec for rec in raw_history if int(rec.get("epoch", 0)) <= start_epoch
+                    ]
+                    logger.info(
+                        f"Loaded {len(logger_cb.history)} historical epoch metric records up to Epoch {start_epoch}."
+                    )
                 except Exception as e:
                     logger.warning(f"Could not load previous metric history: {e}")
 

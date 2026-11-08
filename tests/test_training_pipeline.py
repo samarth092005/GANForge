@@ -252,6 +252,55 @@ class TestTrainingPipeline(unittest.TestCase):
         self.assertTrue((self.samples_dir / "epoch_002_grid.png").exists())
         self.assertTrue((self.checkpoints_dir / "checkpoint_meta.json").exists())
 
+    def test_resume_training_and_metric_deduplication(self) -> None:
+        """Verify resume continues to target epoch and appends metrics without duplicates."""
+        self._create_synthetic_dataset(count=8)
+
+        # 1. Run 1 epoch initially
+        gen1, disc1, hist1 = train_dcgan(
+            epochs=1,
+            batch_size=4,
+            latent_dim=self.latent_dim,
+            resume=False,
+            data_dir=self.data_dir,
+            checkpoints_dir=self.checkpoints_dir,
+            samples_dir=self.samples_dir,
+            metrics_dir=self.metrics_dir,
+            checkpoint_frequency=1,
+            verbose=False,
+        )
+        self.assertEqual(len(hist1), 1)
+        self.assertEqual(hist1[0]["epoch"], 1)
+
+        # 2. Resume to epoch 2
+        gen2, disc2, hist2 = train_dcgan(
+            epochs=2,
+            batch_size=4,
+            latent_dim=self.latent_dim,
+            resume=True,
+            data_dir=self.data_dir,
+            checkpoints_dir=self.checkpoints_dir,
+            samples_dir=self.samples_dir,
+            metrics_dir=self.metrics_dir,
+            checkpoint_frequency=1,
+            verbose=False,
+        )
+        self.assertEqual(len(hist2), 2)
+        epochs_logged = [h["epoch"] for h in hist2]
+        self.assertEqual(
+            epochs_logged,
+            [1, 2],
+            "Metric history contains duplicated or missing epochs upon resume!",
+        )
+
+    def test_fixed_sample_noise_consistency(self) -> None:
+        """Verify fixed sample noise remains perfectly identical across distinct callback instances."""
+        gen = build_generator(latent_dim=self.latent_dim)
+        cb1 = SampleGridCallback(gen, output_dir=self.samples_dir, num_samples=16, seed=42)
+        cb2 = SampleGridCallback(gen, output_dir=self.samples_dir, num_samples=16, seed=42)
+
+        np.testing.assert_array_equal(cb1.fixed_noise.numpy(), cb2.fixed_noise.numpy())
+
 
 if __name__ == "__main__":
     unittest.main()
