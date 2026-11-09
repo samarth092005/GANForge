@@ -27,7 +27,7 @@ from models.losses import discriminator_loss, generator_loss, get_optimizers
 from tests.test_fid_evaluation import MockInceptionV3
 from training.callbacks import SampleGridCallback, TrainingLogger
 from training.checkpoint import GANCheckpointManager
-from training.train import train_dcgan
+from training.train import main, train_dcgan
 
 
 class TestTrainingPipeline(unittest.TestCase):
@@ -438,6 +438,117 @@ class TestTrainingPipeline(unittest.TestCase):
         self.assertEqual([h["epoch"] for h in hist], [1, 2])
         self.assertIsNotNone(hist[0]["fid_score"])
         self.assertIsNotNone(hist[1]["fid_score"])
+
+    def test_custom_output_dir_isolation_and_resume(self) -> None:
+        """Verify custom output_dir receives all artifacts and default directories remain untouched."""
+        from config.settings import CHECKPOINTS_DIR, METRICS_DIR, SAMPLES_DIR
+
+        self._create_synthetic_dataset(count=8)
+        self._create_synthetic_val_dataset(count=6)
+
+        custom_root = self.test_dir / "custom_outputs"
+        custom_ckpt = custom_root / "checkpoints"
+        custom_samples = custom_root / "samples"
+        custom_metrics = custom_root / "metrics"
+
+        # Record file counts in default output directories prior to training
+        default_ckpts_before = set(CHECKPOINTS_DIR.glob("*"))
+        default_samples_before = set(SAMPLES_DIR.glob("*"))
+        default_metrics_before = set(METRICS_DIR.glob("*"))
+
+        mock_model = MockInceptionV3(feature_dim=64)
+        evaluator1 = FIDEvaluator(
+            val_data_path=self.data_dir / "val_images.npy",
+            model=mock_model,
+            num_samples=6,
+            latent_dim=self.latent_dim,
+            seed=42,
+        )
+
+        # 1. Run Epoch 1 with custom output directories
+        train_dcgan(
+            epochs=1,
+            batch_size=4,
+            latent_dim=self.latent_dim,
+            resume=False,
+            data_dir=self.data_dir,
+            checkpoints_dir=custom_ckpt,
+            samples_dir=custom_samples,
+            metrics_dir=custom_metrics,
+            checkpoint_frequency=1,
+            enable_fid=True,
+            fid_evaluator=evaluator1,
+            verbose=False,
+        )
+
+        # Verify all artifacts exist in custom_root
+        self.assertTrue((custom_ckpt / "checkpoint_meta.json").exists())
+        self.assertTrue((custom_samples / "epoch_001_grid.png").exists())
+        self.assertTrue((custom_metrics / "training_history.csv").exists())
+        self.assertTrue((custom_metrics / "training_history.json").exists())
+
+        # Verify default directories remain completely untouched
+        self.assertEqual(set(CHECKPOINTS_DIR.glob("*")), default_ckpts_before)
+        self.assertEqual(set(SAMPLES_DIR.glob("*")), default_samples_before)
+        self.assertEqual(set(METRICS_DIR.glob("*")), default_metrics_before)
+
+        # 2. Resume to Epoch 2 using the same custom directory
+        evaluator2 = FIDEvaluator(
+            val_data_path=self.data_dir / "val_images.npy",
+            model=mock_model,
+            num_samples=6,
+            latent_dim=self.latent_dim,
+            seed=42,
+        )
+
+        gen, disc, hist = train_dcgan(
+            epochs=2,
+            batch_size=4,
+            latent_dim=self.latent_dim,
+            resume=True,
+            data_dir=self.data_dir,
+            checkpoints_dir=custom_ckpt,
+            samples_dir=custom_samples,
+            metrics_dir=custom_metrics,
+            checkpoint_frequency=1,
+            enable_fid=True,
+            fid_evaluator=evaluator2,
+            verbose=False,
+        )
+
+        self.assertEqual(len(hist), 2)
+        self.assertEqual([h["epoch"] for h in hist], [1, 2])
+        meta = json.loads((custom_ckpt / "checkpoint_meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["latest_epoch"], 2)
+
+        # Default directories still untouched
+        self.assertEqual(set(CHECKPOINTS_DIR.glob("*")), default_ckpts_before)
+        self.assertEqual(set(SAMPLES_DIR.glob("*")), default_samples_before)
+        self.assertEqual(set(METRICS_DIR.glob("*")), default_metrics_before)
+
+    def test_cli_output_dir_derivation(self) -> None:
+        """Verify CLI correctly derives checkpoints_dir, samples_dir, and metrics_dir from --output-dir."""
+        from unittest.mock import patch
+
+        custom_root = self.test_dir / "cli_test_out"
+        cli_argv = [
+            "--epochs", "1",
+            "--batch-size", "4",
+            "--data-dir", str(self.data_dir),
+            "--output-dir", str(custom_root),
+            "--no-fid",
+        ]
+
+        with patch("training.train.train_dcgan") as mock_train:
+            main(cli_argv)
+            mock_train.assert_called_once()
+            call_kwargs = mock_train.call_args[1]
+
+            self.assertEqual(call_kwargs["checkpoints_dir"], custom_root / "checkpoints")
+            self.assertEqual(call_kwargs["samples_dir"], custom_root / "samples")
+            self.assertEqual(call_kwargs["metrics_dir"], custom_root / "metrics")
+            self.assertEqual(call_kwargs["epochs"], 1)
+            self.assertEqual(call_kwargs["enable_fid"], False)
 
 
 if __name__ == "__main__":

@@ -396,7 +396,8 @@ def train_dcgan(
     return generator, discriminator, logger_cb.history
 
 
-if __name__ == "__main__":
+def main(argv: Optional[Sequence[str]] = None) -> None:
+    """CLI entry point for DCGAN training."""
     parser = argparse.ArgumentParser(description="GANForge DCGAN Training Engine.")
     parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS, help="Target epochs")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help="Batch size")
@@ -409,7 +410,12 @@ if __name__ == "__main__":
     parser.add_argument("--output-dir", type=str, default=str(CHECKPOINTS_DIR.parent), help="Outputs base folder")
     parser.add_argument("--checkpoint-frequency", type=int, default=1, help="Save checkpoint every N epochs (default: 1)")
     parser.add_argument("--no-fid", action="store_true", help="Disable FID evaluation")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+
+    output_root = Path(args.output_dir)
+    checkpoints_dir = output_root / "checkpoints"
+    samples_dir = output_root / "samples"
+    metrics_dir = output_root / "metrics"
 
     train_dcgan(
         epochs=args.epochs,
@@ -420,6 +426,13 @@ if __name__ == "__main__":
         seed=args.seed,
         data_dir=args.data_dir,
         val_data_path=args.val_data_path,
+        checkpoints_dir=checkpoints_dir,
+        samples_dir=samples_dir,
+        metrics_dir=metrics_dir,
         checkpoint_frequency=args.checkpoint_frequency,
         enable_fid=not args.no_fid,
     )
+
+
+if __name__ == "__main__":
+    main()
