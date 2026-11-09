@@ -31,6 +31,11 @@ CHECKPOINTS_DIR: Path = OUTPUTS_DIR / "checkpoints"
 METRICS_DIR: Path = OUTPUTS_DIR / "metrics"
 REPORTS_DIR: Path = BASE_DIR / "reports"
 
+# 50-Epoch Colab Artifact Directories
+FINAL_RUN_DIR: Path = BASE_DIR / "final_run_50_epochs"
+FINAL_RUN_METRICS: Path = FINAL_RUN_DIR / "metrics" / "training_history.csv"
+FINAL_RUN_SAMPLES: Path = FINAL_RUN_DIR / "samples"
+
 # Ensure all critical directories exist
 for directory in [
     RAW_DATA_DIR,
@@ -62,11 +67,15 @@ BETA_2: float = 0.999
 BLIP_MODEL_ID: str = "Salesforce/blip-image-captioning-base"
 FID_IMAGE_SIZE: tuple[int, int] = (299, 299)  # InceptionV3 input size
 
-# Groq LLM Configuration
+# Gemini API Configuration for AI Auto-Report Generation (Unit U2)
+GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+# Groq LLM Configuration (Legacy/Fallback)
 GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 GROQ_FALLBACK_MODEL: str = "llama-3.3-70b-versatile"
 
 # Responsible AI & Dataset Metadata Defaults
-DEFAULT_DATASET_LICENSE: str = "Creative Commons Attribution (CC-BY 4.0)"
-DEFAULT_PROVENANCE: str = "Traditional Indian Rangoli Open Art Repository / Synthetic Sample Benchmark"
+DEFAULT_DATASET_LICENSE: str = "No separate dataset licence declared"
+DEFAULT_PROVENANCE: str = "Algorithmic Procedural Rangoli Generator (data/rangoli_generator.py)"

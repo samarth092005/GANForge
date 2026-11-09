@@ -1,0 +1,23 @@
+{
+  "total_scanned": 302,
+  "valid_count": 300,
+  "rejected_count": 2,
+  "rejection_reasons": {
+    "corrupted_UnidentifiedImageError": 1,
+    "unsupported_extension_.txt": 1
+  },
+  "train_count": 240,
+  "val_count": 60,
+  "image_shape": [
+    64,
+    64,
+    3
+  ],
+  "pixel_min": -1.0,
+  "pixel_max": 1.0,
+  "pixel_mean": 0.3522278368473053,
+  "pixel_std": 0.6427421569824219,
+  "split_ratio": 0.8,
+  "random_seed": 42,
+  "processed_at": "2026-11-08T05:56:22.792267+00:00"
+}

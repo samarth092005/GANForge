@@ -69,3 +69,21 @@ Thumbs.db
 
 # Notebook Checkpoints
 .ipynb_checkpoints/
+
+# UC40 temporary and duplicate artifacts
+/metrics/
+/samples/
+/outputs/smoke_test/
+/test_blip.py
+
+# Include selected final training metrics
+!/outputs/metrics/dataset_stats.json
+!/outputs/metrics/training_history.csv
+!/outputs/metrics/training_history.json
+
+# Include selected final sample grids
+!/outputs/samples/dataset_preview_grid.png
+!/outputs/samples/epoch_001_grid.png
+!/outputs/samples/epoch_010_grid.png
+!/outputs/samples/epoch_025_grid.png
+!/outputs/samples/epoch_050_grid.png
