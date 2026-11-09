@@ -51,6 +51,7 @@ class TrainingLogger:
         epoch_duration_sec: float,
         batches_processed: int,
         images_processed: int,
+        fid_score: Optional[float] = None,
     ) -> dict[str, Any]:
         """Logs the actual metrics computed during a single training epoch.
 
@@ -63,6 +64,7 @@ class TrainingLogger:
             epoch_duration_sec: Duration of epoch training in seconds.
             batches_processed: Number of batches in the epoch.
             images_processed: Number of real images passed through the epoch.
+            fid_score: Optional Fréchet Inception Distance score for the epoch.
 
         Returns:
             Dictionary record of the logged metrics.
@@ -73,6 +75,7 @@ class TrainingLogger:
             "discriminator_loss": round(float(discriminator_loss), 6),
             "disc_real_loss": round(float(disc_real_loss), 6),
             "disc_fake_loss": round(float(disc_fake_loss), 6),
+            "fid_score": round(float(fid_score), 4) if fid_score is not None else None,
             "epoch_duration_sec": round(float(epoch_duration_sec), 3),
             "batches_processed": int(batches_processed),
             "images_processed": int(images_processed),

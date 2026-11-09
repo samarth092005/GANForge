@@ -20,9 +20,11 @@ import numpy as np
 import tensorflow as tf
 
 from config.settings import CHANNELS, IMAGE_SIZE, LATENT_DIM
+from evaluation.fid import FIDEvaluator
 from models.discriminator import build_discriminator
 from models.generator import build_generator
 from models.losses import discriminator_loss, generator_loss, get_optimizers
+from tests.test_fid_evaluation import MockInceptionV3
 from training.callbacks import SampleGridCallback, TrainingLogger
 from training.checkpoint import GANCheckpointManager
 from training.train import train_dcgan
@@ -56,6 +58,15 @@ class TestTrainingPipeline(unittest.TestCase):
         ).astype(np.float32)
         save_path = self.data_dir / "train_images.npy"
         np.save(save_path, synthetic_images)
+        return save_path
+
+    def _create_synthetic_val_dataset(self, count: int = 6) -> Path:
+        """Helper to create small synthetic val_images.npy."""
+        synthetic_val = np.random.uniform(
+            -1.0, 1.0, size=(count, IMAGE_SIZE[0], IMAGE_SIZE[1], CHANNELS)
+        ).astype(np.float32)
+        save_path = self.data_dir / "val_images.npy"
+        np.save(save_path, synthetic_val)
         return save_path
 
     # ---------------------------------------------------------
@@ -181,6 +192,7 @@ class TestTrainingPipeline(unittest.TestCase):
             epoch_duration_sec=2.5,
             batches_processed=8,
             images_processed=240,
+            fid_score=45.6789,
         )
 
         csv_p, json_p = logger_cb.save_metrics()
@@ -191,6 +203,7 @@ class TestTrainingPipeline(unittest.TestCase):
         self.assertEqual(len(loaded_json), 1)
         self.assertEqual(loaded_json[0]["epoch"], 1)
         self.assertAlmostEqual(loaded_json[0]["generator_loss"], 1.234)
+        self.assertAlmostEqual(loaded_json[0]["fid_score"], 45.6789)
 
     def test_sample_grid_callback_milestones(self) -> None:
         """Verify SampleGridCallback exports PNG grid on milestone epochs."""
@@ -300,6 +313,131 @@ class TestTrainingPipeline(unittest.TestCase):
         cb2 = SampleGridCallback(gen, output_dir=self.samples_dir, num_samples=16, seed=42)
 
         np.testing.assert_array_equal(cb1.fixed_noise.numpy(), cb2.fixed_noise.numpy())
+
+    def test_training_pipeline_with_fid_evaluation(self) -> None:
+        """Verify FID evaluation is executed after each epoch, recorded in history, and saved in metadata."""
+        import pandas as pd
+        self._create_synthetic_dataset(count=8)
+        self._create_synthetic_val_dataset(count=6)
+
+        # Mock FIDEvaluator to avoid downloading InceptionV3 weights during unit test
+        mock_model = MockInceptionV3(feature_dim=64)
+        evaluator = FIDEvaluator(
+            val_data_path=self.data_dir / "val_images.npy",
+            model=mock_model,
+            num_samples=6,
+            latent_dim=self.latent_dim,
+            seed=42,
+        )
+
+        gen, disc, history = train_dcgan(
+            epochs=2,
+            batch_size=4,
+            latent_dim=self.latent_dim,
+            resume=False,
+            data_dir=self.data_dir,
+            checkpoints_dir=self.checkpoints_dir,
+            samples_dir=self.samples_dir,
+            metrics_dir=self.metrics_dir,
+            milestone_epochs=(1, 2),
+            seed=42,
+            checkpoint_frequency=1,
+            enable_fid=True,
+            fid_evaluator=evaluator,
+            verbose=False,
+        )
+
+        self.assertEqual(len(history), 2)
+        # FID must be recorded in history for each epoch
+        for epoch_rec in history:
+            self.assertIn("fid_score", epoch_rec)
+            self.assertIsNotNone(epoch_rec["fid_score"])
+            self.assertIsInstance(epoch_rec["fid_score"], float)
+            self.assertGreaterEqual(epoch_rec["fid_score"], 0.0)
+
+        # Confirm CSV contains fid_score
+        csv_path = self.metrics_dir / "training_history.csv"
+        self.assertTrue(csv_path.exists())
+        df = pd.read_csv(csv_path)
+        self.assertIn("fid_score", df.columns)
+        self.assertEqual(len(df), 2)
+        self.assertFalse(df["fid_score"].isnull().any())
+
+        # Confirm JSON contains fid_score
+        json_path = self.metrics_dir / "training_history.json"
+        self.assertTrue(json_path.exists())
+        with open(json_path, "r", encoding="utf-8") as f:
+            json_data = json.load(f)
+        self.assertEqual(len(json_data), 2)
+        self.assertIn("fid_score", json_data[0])
+        self.assertIsNotNone(json_data[0]["fid_score"])
+
+        # Confirm Checkpoint metadata includes FID
+        meta_path = self.checkpoints_dir / "checkpoint_meta.json"
+        self.assertTrue(meta_path.exists())
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta_data = json.load(f)
+        self.assertIn("fid_score", meta_data.get("metrics", {}))
+        self.assertIsNotNone(meta_data["metrics"]["fid_score"])
+
+    def test_resume_training_preserves_fid_history(self) -> None:
+        """Verify resuming training preserves earlier FID history without duplicates or data loss."""
+        self._create_synthetic_dataset(count=8)
+        self._create_synthetic_val_dataset(count=6)
+
+        mock_model = MockInceptionV3(feature_dim=64)
+        evaluator1 = FIDEvaluator(
+            val_data_path=self.data_dir / "val_images.npy",
+            model=mock_model,
+            num_samples=6,
+            latent_dim=self.latent_dim,
+            seed=42,
+        )
+
+        # 1. Run 1 epoch
+        train_dcgan(
+            epochs=1,
+            batch_size=4,
+            latent_dim=self.latent_dim,
+            resume=False,
+            data_dir=self.data_dir,
+            checkpoints_dir=self.checkpoints_dir,
+            samples_dir=self.samples_dir,
+            metrics_dir=self.metrics_dir,
+            checkpoint_frequency=1,
+            enable_fid=True,
+            fid_evaluator=evaluator1,
+            verbose=False,
+        )
+
+        # 2. Resume to epoch 2
+        evaluator2 = FIDEvaluator(
+            val_data_path=self.data_dir / "val_images.npy",
+            model=mock_model,
+            num_samples=6,
+            latent_dim=self.latent_dim,
+            seed=42,
+        )
+
+        gen, disc, hist = train_dcgan(
+            epochs=2,
+            batch_size=4,
+            latent_dim=self.latent_dim,
+            resume=True,
+            data_dir=self.data_dir,
+            checkpoints_dir=self.checkpoints_dir,
+            samples_dir=self.samples_dir,
+            metrics_dir=self.metrics_dir,
+            checkpoint_frequency=1,
+            enable_fid=True,
+            fid_evaluator=evaluator2,
+            verbose=False,
+        )
+
+        self.assertEqual(len(hist), 2)
+        self.assertEqual([h["epoch"] for h in hist], [1, 2])
+        self.assertIsNotNone(hist[0]["fid_score"])
+        self.assertIsNotNone(hist[1]["fid_score"])
 
 
 if __name__ == "__main__":

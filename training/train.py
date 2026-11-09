@@ -34,6 +34,7 @@ from config.settings import (
     RANDOM_SEED,
     SAMPLES_DIR,
 )
+from evaluation.fid import FIDEvaluator
 from models.discriminator import build_discriminator
 from models.generator import build_generator
 from models.losses import discriminator_loss, generator_loss, get_optimizers
@@ -125,12 +126,15 @@ def train_dcgan(
     label_smoothing: float = 0.1,
     resume: bool = False,
     data_dir: Path | str = PROCESSED_DATA_DIR,
+    val_data_path: Optional[Path | str] = None,
     checkpoints_dir: Path | str = CHECKPOINTS_DIR,
     samples_dir: Path | str = SAMPLES_DIR,
     metrics_dir: Path | str = METRICS_DIR,
     milestone_epochs: Sequence[int] = (1, 10, 25, 50),
     seed: int = RANDOM_SEED,
-    checkpoint_frequency: int = 10,
+    checkpoint_frequency: int = 1,
+    enable_fid: bool = True,
+    fid_evaluator: Optional[FIDEvaluator] = None,
     verbose: bool = True,
 ) -> tuple[tf.keras.Model, tf.keras.Model, list[dict[str, Any]]]:
     """Executes the full DCGAN adversarial training loop.
@@ -146,12 +150,15 @@ def train_dcgan(
         label_smoothing: One-sided label smoothing for real images (default 0.1).
         resume: Whether to resume training from the latest checkpoint.
         data_dir: Directory containing processed train_images.npy.
+        val_data_path: Optional explicit path to val_images.npy.
         checkpoints_dir: Directory for storing model checkpoints.
         samples_dir: Directory for exporting visual sample grids.
         metrics_dir: Directory for saving training history logs.
         milestone_epochs: Epoch milestones for sample grid generation.
         seed: Reproducible random seed.
-        checkpoint_frequency: Save checkpoint every N epochs.
+        checkpoint_frequency: Save checkpoint every N epochs (default 1).
+        enable_fid: Whether to evaluate Fréchet Inception Distance (FID) after each epoch.
+        fid_evaluator: Optional pre-configured FIDEvaluator instance.
         verbose: Whether to print per-epoch progress logs.
 
     Returns:
@@ -163,7 +170,7 @@ def train_dcgan(
     # 1. Hardware Initialization
     hw_info = configure_hardware()
 
-    # 2. Dataset Loading
+    # 2. Dataset Loading (Train Set)
     dataset, total_images = load_dataset(data_dir, batch_size=batch_size, seed=seed)
 
     # 3. Model Architecture Instantiation
@@ -198,7 +205,29 @@ def train_dcgan(
 
     logger_cb = TrainingLogger(metrics_dir=metrics_dir)
 
-    # 6. Checkpoint Restoration (if requested)
+    # 6. FID Evaluation Precomputation (InceptionV3 initialized once, real validation stats precomputed)
+    if enable_fid and fid_evaluator is None:
+        vpath = Path(val_data_path) if val_data_path else Path(data_dir) / "val_images.npy"
+        if vpath.exists():
+            try:
+                logger.info(f"Initializing FID evaluation using validation set: {vpath}")
+                fid_evaluator = FIDEvaluator(
+                    val_data_path=vpath,
+                    num_samples=60,
+                    latent_dim=latent_dim,
+                    seed=seed,
+                )
+            except Exception as e:
+                logger.warning(f"Could not initialize FID evaluator ({e}). Training will continue without FID.")
+                fid_evaluator = None
+        else:
+            logger.warning(
+                f"Validation dataset not found at '{vpath}'. FID evaluation will be skipped.\n"
+                "To enable FID, ensure val_images.npy exists in data_dir."
+            )
+            fid_evaluator = None
+
+    # 7. Checkpoint Restoration (if requested)
     start_epoch = 0
     if resume:
         start_epoch = ckpt_mgr.restore_latest()
@@ -223,7 +252,7 @@ def train_dcgan(
         logger.info(f"Model is already trained for {start_epoch} epochs (>= target {epochs}).")
         return generator, discriminator, logger_cb.history
 
-    # 7. Compiled TensorFlow Training Step with tf.GradientTape
+    # 8. Compiled TensorFlow Training Step with tf.GradientTape
     @tf.function
     def train_step(real_images_batch: tf.Tensor, current_batch_size: tf.Tensor):
         # Generate random latent vectors z ~ N(0, 1)
@@ -253,7 +282,7 @@ def train_dcgan(
 
         return loss_g, loss_d, loss_d_real, loss_d_fake
 
-    # 8. Training Execution Loop
+    # 9. Training Execution Loop
     config_dict = {
         "epochs": epochs,
         "batch_size": batch_size,
@@ -263,6 +292,7 @@ def train_dcgan(
         "beta_1": beta_1,
         "beta_2": beta_2,
         "label_smoothing": label_smoothing,
+        "checkpoint_frequency": checkpoint_frequency,
         "seed": seed,
         "hardware": hw_info,
     }
@@ -304,6 +334,20 @@ def train_dcgan(
         avg_loss_d_real = float(np.mean(batch_real_losses))
         avg_loss_d_fake = float(np.mean(batch_fake_losses))
 
+        # Evaluate FID after every epoch using fixed 60 latent samples
+        current_fid: Optional[float] = None
+        if fid_evaluator is not None:
+            try:
+                fid_start = time.perf_counter()
+                current_fid = fid_evaluator.evaluate(generator)
+                fid_duration = time.perf_counter() - fid_start
+                logger.info(
+                    f"Epoch {epoch} FID Score: {current_fid:.4f} (eval duration: {fid_duration:.2f}s)"
+                )
+            except Exception as e:
+                logger.warning(f"Error evaluating FID at epoch {epoch}: {e}")
+                current_fid = None
+
         # Record metrics in logger callback
         rec = logger_cb.log_epoch(
             epoch=epoch,
@@ -314,25 +358,31 @@ def train_dcgan(
             epoch_duration_sec=epoch_duration,
             batches_processed=num_batches,
             images_processed=total_images,
+            fid_score=current_fid,
         )
 
+        # Save metrics after every epoch to both CSV and JSON
+        logger_cb.save_metrics()
+
         if verbose:
+            fid_str = f" | FID: {current_fid:7.4f}" if current_fid is not None else ""
             print(
                 f"Epoch [{epoch:03d}/{epochs:03d}] "
                 f"Duration: {epoch_duration:5.2f}s | "
                 f"Loss G: {avg_loss_g:6.4f} | "
                 f"Loss D: {avg_loss_d:6.4f} (Real: {avg_loss_d_real:6.4f}, Fake: {avg_loss_d_fake:6.4f})"
+                f"{fid_str}"
             )
 
         # Generate sample grid at milestone epochs or final epoch
         is_final_epoch = (epoch == epochs)
         sample_cb.generate_and_save(epoch=epoch, is_final=is_final_epoch)
 
-        # Periodic checkpointing
+        # Periodic checkpointing (configurable frequency, defaulting to 1 = every epoch)
         if (epoch % checkpoint_frequency == 0) or is_final_epoch:
             ckpt_mgr.save(epoch=epoch, metrics=rec, config=config_dict)
 
-    # 9. Final Persistence & Weight Export
+    # 10. Final Persistence & Weight Export
     logger_cb.save_metrics()
     ckpt_mgr.export_weights(export_dir=checkpoints_dir, prefix=f"epoch_{epochs:03d}")
 
@@ -355,7 +405,10 @@ if __name__ == "__main__":
     parser.add_argument("--resume", action="store_true", help="Resume from latest checkpoint")
     parser.add_argument("--seed", type=int, default=RANDOM_SEED, help="Random seed")
     parser.add_argument("--data-dir", type=str, default=str(PROCESSED_DATA_DIR), help="Processed dataset folder")
+    parser.add_argument("--val-data-path", type=str, default=None, help="Explicit path to val_images.npy")
     parser.add_argument("--output-dir", type=str, default=str(CHECKPOINTS_DIR.parent), help="Outputs base folder")
+    parser.add_argument("--checkpoint-frequency", type=int, default=1, help="Save checkpoint every N epochs (default: 1)")
+    parser.add_argument("--no-fid", action="store_true", help="Disable FID evaluation")
     args = parser.parse_args()
 
     train_dcgan(
@@ -366,4 +419,7 @@ if __name__ == "__main__":
         resume=args.resume,
         seed=args.seed,
         data_dir=args.data_dir,
+        val_data_path=args.val_data_path,
+        checkpoint_frequency=args.checkpoint_frequency,
+        enable_fid=not args.no_fid,
     )
